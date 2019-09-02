@@ -1,0 +1,272 @@
+#!/bin/sh
+# Copyright (c) 2015-2019 LunarG, Inc.
+
+usage() {
+    echo "Script to clone and build Repositories useful for Vulkan development"
+    echo ""
+    echo "Usage: $0 [help] [--debug] [glslang] [loader] [layers] [tools] [lunarg-tools]"
+    echo "     [shaderc] [spirvtools] [spirvcross] [examples] [samples] [vlf] [clean]"
+    echo ""
+    echo "Any or all options can be specified at once"
+    exit
+}
+
+buildGlslang() {
+    if [ ! -d "${GLSL_DIR}/${BUILD_DIR}" ] || [ ! -f "$LIBDIR"/libglslang.a ] || \
+	   [ ! -f "$LIBDIR"/libOGLCompiler.a ] || [ ! -f "$LIBDIR"/libOSDependent.a ] || \
+	   [ ! -f "$LIBDIR"/libHLSL.a ] || [ ! -f "$LIBDIR"/libSPIRV.a ] || \
+	   [ ! -f "$LIBDIR"/libSPVRemapper.a ]; then
+	echo "~~~Building glslang Repo~~~"
+	[ ! -d "$GLSL_DIR" ] && git clone $GLSL_URL "$GLSL_DIR"
+	cd "$GLSL_DIR"
+	git checkout $GLSL_BRANCH
+	[ ! -d External/spirv-tools ] && python update_glslang_sources.py
+	[ -d "${GLSL_DIR}/${BUILD_DIR}" ] || mkdir -p "${GLSL_DIR}/${BUILD_DIR}"
+	cd "${GLSL_DIR}/${BUILD_DIR}"
+	cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+	      -DCMAKE_INSTALL_PREFIX="$ARCHDIR" \
+	      -DCMAKE_INSTALL_LIBDIR="$LIBDIR" \
+	      -DCMAKE_INSTALL_BINDIR="$BINDIR" ..
+	make $MF install    
+	cd "$SDKDIR"
+    else
+	echo "Glslang/SPIRV-Tools is already built"
+    fi
+}
+
+buildLoader() {
+    buildGlslang
+    echo "~~~Building Vulkan Loader Repo~~~"
+    [ ! -d "$VL_DIR" ] && git clone $VL_URL "$VL_DIR"
+    cd "$VL_DIR"
+    git checkout $VL_BRANCH
+    [ -d "${VL_DIR}/${BUILD_DIR}" ] || mkdir -p "${VL_DIR}/${BUILD_DIR}"
+    cd "${VL_DIR}/${BUILD_DIR}"
+    cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+	  -DVULKAN_HEADERS_INSTALL_DIR="$ARCHDIR" \
+	  -DVULKAN_REGISTRY_PATH_HINT="$ARCHDIR" \
+	  -DCMAKE_INSTALL_PREFIX="$ARCHDIR" \
+	  -DCMAKE_INSTALL_LIBDIR="$LIBDIR" \
+	  -DCMAKE_INSTALL_BINDIR="$BINDIR" ..
+    make $MF install
+    cd "$SDKDIR"
+}
+
+buildValidationLayers() {
+    buildLoader
+    echo "~~~Building Vulkan-ValidationLayers Repo~~~"
+    [ ! -d "$VV_DIR" ] && git clone $VV_URL "$VV_DIR"
+    cd "$VV_DIR"
+    git checkout $VV_BRANCH
+    [ -d "${VV_DIR}/${BUILD_DIR}" ] || mkdir -p "${VV_DIR}/${BUILD_DIR}"
+    cd "${VV_DIR}/${BUILD_DIR}"
+    cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+	  -DVULKAN_HEADERS_INSTALL_DIR="$ARCHDIR" \
+	  -DVULKAN_REGISTRY_PATH_HINT="$ARCHDIR" \
+	  -DVULKAN_LOADER_INSTALL_DIR="$ARCHDIR" \
+	  -DGLSLANG_INSTALL_DIR="$ARCHDIR" \
+	  -DCMAKE_INSTALL_DATAROOTDIR="etc" \
+	  -DBUILD_TESTS="OFF" \
+	  -DCMAKE_INSTALL_PREFIX="$ARCHDIR" \
+	  -DCMAKE_INSTALL_LIBDIR="$LIBDIR" \
+	  -DCMAKE_INSTALL_BINDIR="$BINDIR" ..
+    make $MF install
+    cd "$SDKDIR"
+}
+
+buildVT() {
+    buildLoader
+    echo "~~~Building Vulkan-Tools Repo~~~"
+    [ ! -d "$VT_DIR" ] && git clone $VT_URL "$VT_DIR"
+    cd "$VT_DIR"
+    [ -d "${VT_DIR}/${BUILD_DIR}" ] || mkdir -p "${VT_DIR}/${BUILD_DIR}"
+    cd "${VT_DIR}/${BUILD_DIR}"
+    cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_INSTALL_PREFIX="$ARCHDIR" \
+	  -DVULKAN_LOADER_INSTALL_DIR="$ARCHDIR" \
+	  -DGLSLANG_INSTALL_DIR="$ARCHDIR" \
+	  -DVULKAN_HEADERS_INSTALL_DIR="$ARCHDIR" \
+	  -DCMAKE_INSTALL_LIBDIR="$LIBDIR" \
+	  -DCMAKE_INSTALL_BINDIR="$BINDIR" ..
+    make $MF install
+    cd "$SDKDIR"
+}
+
+buildLGVT() {
+    buildValidationLayers
+    echo "~~~Building LunarG VulkanTools Repo~~~"
+    [ ! -d "$LGVT_DIR" ] && git clone --recurse-submodules $LGVT_URL "$LGVT_DIR"
+    cd "$LGVT_DIR"
+    git checkout $LGVT_BRANCH
+    git submodule update --init --recursive
+    ./update_external_sources.sh
+    [ -d "${LGVT_DIR}/${BUILD_DIR}" ] || mkdir -p "${LGVT_DIR}/${BUILD_DIR}"
+    cd "${LGVT_DIR}/${BUILD_DIR}"
+    cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+	  -DVULKAN_LOADER_INSTALL_DIR="$ARCHDIR" \
+	  -DVULKAN_HEADERS_INSTALL_DIR="$ARCHDIR" \
+	  -DVULKAN_REGISTRY_PATH_HINT="$ARCHDIR" \
+	  -DVULKAN_VALIDATIONLAYERS_INSTALL_DIR="$ARCHDIR" \
+	  -DBUILD_VLF="OFF" \
+	  -DBUILD_TESTS="OFF" \
+	  -DCMAKE_INSTALL_PREFIX="$ARCHDIR" \
+	  -DCMAKE_INSTALL_LIBDIR="$LIBDIR" \
+	  -DCMAKE_INSTALL_BINDIR="$BINDIR" ..
+    make $MF install
+    cd "$SDKDIR"
+}
+
+buildVLF() {
+    if [ ! -f $INCLUDEDIR/vk_loader_platform.h ]; then
+	buildLGVT
+    fi
+    cd "$SDKDIR"/source/layer_factory
+    [ -d build ] || mkdir build
+    cd build
+    cmake ..
+    make $MF
+    cd "$SDKDIR"
+}
+
+buildShaderc() {
+    [ ! -d "$SHADERC_DIR" ] && git clone $SHADERC_URL $SHADERC_DIR
+    cd "$SHADERC_DIR"
+    git checkout $SHADERC_BRANCH
+    python update_shaderc_sources.py
+    cd src
+    [ -d "${SHADERC_DIR}/src/${BUILD_DIR}" ] || mkdir "${SHADERC_DIR}/src/${BUILD_DIR}"
+    cd "${SHADERC_DIR}/src/${BUILD_DIR}"
+    cmake -G"Unix Makefiles" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+	  -DSHADERC_SKIP_INSTALL="OFF" -DSHADERC_SKIP_TESTS="ON" \
+	  -DSKIP_SPIRV_TOOLS_INSTALL="ON" -DSKIP_GLSLANG_INSTALL="ON" \
+	  -DCMAKE_INSTALL_PREFIX="$ARCHDIR" -DCMAKE_INSTALL_LIBDIR="$LIBDIR" \
+	  -DCMAKE_INSTALL_BINDIR="$BINDIR" ..
+    make $MF install
+    cd "$SDKDIR"
+}
+
+buildSpirvCross() {
+    [ ! -d "$SPIRV_CROSS_DIR" ] && git clone $SPIRV_CROSS_URL $SPIRV_CROSS_DIR
+    cd "$SPIRV_CROSS_DIR"
+    git checkout $SPIRV_CROSS_BRANCH
+    [ -d "${SPIRV_CROSS_DIR}/${BUILD_DIR}" ] || mkdir "${SPIRV_CROSS_DIR}/${BUILD_DIR}"
+    cd "${SPIRV_CROSS_DIR}/${BUILD_DIR}"
+    cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_INSTALL_PREFIX="$ARCHDIR" \
+	  -DCMAKE_INSTALL_BINDIR="$BINDIR" -DCMAKE_INSTALL_LIBDIR="$LIBDIR" ..
+    make $MF install
+    cd "$SDKDIR"
+}
+
+buildExamples() {
+    cd "$SDKDIR"/examples
+    [ -d "${SDKDIR}/examples/${BUILD_DIR}" ] || mkdir "${SDKDIR}/examples/${BUILD_DIR}"
+    cd "${SDKDIR}/examples/${BUILD_DIR}"
+    cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE ..
+    make $MF
+    cd "$SDKDIR"
+}
+
+buildSamples() {
+    buildGlslang
+    cd "$SDKDIR"/samples
+    [ -d "${SDKDIR}/samples/${BUILD_DIR}" ] || mkdir "${SDKDIR}/samples/${BUILD_DIR}"
+    cd "${SDKDIR}/samples/${BUILD_DIR}"
+    cmake -DCMAKE_BUILD_TYPE=$BUILD_TYPE ..
+    make $MF
+    cd "$SDKDIR"
+}
+
+cleanBuilds() {
+    rm -r $GLSL_DIR/{build,dbuild} 2>/dev/null
+    rm -r $VL_DIR/{build,dbuild} 2>/dev/null
+    rm -r $VV_DIR/{build,dbuild} 2>/dev/null
+    rm -r $VT_DIR/{build,dbuild} 2>/dev/null
+    rm -r $LGVT_DIR/{build,dbuild} 2>/dev/null
+    rm -r $EXAMPLES_DIR/{build,dbuild} 2>/dev/null
+    rm -r $SAMPLES_DIR/{build,dbuild} 2>/dev/null
+    rm -r $SHADERC_DIR/src/{build,dbuild} 2>/dev/null
+    rm -r $SPIRV_CROSS_DIR/{build,dbuild} 2>/dev/null
+    echo "All Build Directories Removed"
+}
+
+SDKDIR="$( dirname "$( readlink -f "${BASH_SOURCE:-$_}" )" )"
+if [ -z "$SDKDIR" ] || [ ! -n "$SDKDIR" ] || [ ! -d "$SDKDIR" ]; then
+    echo "The SDK directory is invalid"
+    exit 1
+fi
+ARCHDIR="$SDKDIR"/x86_64
+BINDIR="$ARCHDIR"/bin
+SHAREDDIR="$ARCHDIR"/shared
+LIBDIR="$ARCHDIR"/lib
+INCLUDEDIR="$ARCHDIR"/include
+SOURCEDIR="$SDKDIR"/source
+EXAMPLES_DIR="$SDKDIR"/examples
+SAMPLES_DIR="$SDKDIR"/samples
+
+#Define Repo Variables for building and cloning
+VH_DIR="$SOURCEDIR"/Vulkan-Headers
+VH_URL=https://github.com/KhronosGroup/Vulkan-Headers.git
+VH_BRANCH=sdk-1.1.108
+VL_DIR="$SOURCEDIR"/Vulkan-Loader
+VL_URL=https://github.com/KhronosGroup/Vulkan-Loader.git
+VL_BRANCH=sdk-1.1.108
+VV_DIR="$SOURCEDIR"/Vulkan-ValidationLayers
+VV_URL=https://github.com/KhronosGroup/Vulkan-ValidationLayers.git
+VV_BRANCH=sdk-1.1.108
+GLSL_DIR="$SOURCEDIR"/glslang
+GLSL_URL=https://github.com/KhronosGroup/glslang.git
+GLSL_BRANCH=21eebe74214488264bbf0d19323a03c13a9e53a7
+VT_DIR="$SOURCEDIR"/Vulkan-Tools
+VT_URL=https://github.com/KhronosGroup/Vulkan-Tools.git
+VT_BRANCH=sdk-1.1.108
+LGVT_DIR="$SOURCEDIR"/VulkanTools
+LGVT_URL=https://github.com/LunarG/VulkanTools.git
+LGVT_BRANCH=sdk-1.1.108
+SHADERC_DIR="$SOURCEDIR"/shaderc
+SHADERC_URL=https://github.com/google/shaderc.git
+SHADERC_BRANCH=d837a4bfe9954d94aa84cc27552f3447c96c52bc
+SPIRV_CROSS_DIR="$SOURCEDIR"/SPIRV-Cross
+SPIRV_CROSS_URL=https://github.com/KhronosGroup/SPIRV-Cross.git
+SPIRV_CROSS_BRANCH=5e9e8918f9a22d488811c575a97ccda2d8a8726d
+
+MF=""
+if [ -z ${MAKEFLAGS+xyz} ]; then
+    if [ -x "$(command -v nproc)" ]; then
+	MF=-j`nproc`
+    fi
+fi
+
+BUILD_DIR="build"
+BUILD_TYPE="Release"
+for i in "$@"
+do
+    if [ "$i" = "--debug" ]; then
+	BUILD_TYPE="Debug"
+	BUILD_DIR="dbuild"
+	LIBDIR="$ARCHDIR"/lib/debug
+	BINDIR="$ARCHDIR"/bin/debug
+    fi
+done
+
+if [ $# -eq 0 ]; then
+    usage
+fi
+
+while test $# -gt 0; do
+    case "$1" in
+	--debug) shift;;
+	examples) shift; buildExamples;;
+	samples) shift; buildSamples;;
+	loader) shift; buildLoader;;
+	layers) shift; buildValidationLayers;;
+	tools) shift; buildVT;;
+	lunarg-tools) shift; buildLGVT;;
+	shaderc) shift; buildShaderc;;
+	glslang) shift; buildGlslang;;
+	spirvtools) shift; buildGlslang;;
+	spirvcross) shift; buildSpirvCross;;
+	vlf) shift; buildVLF;;
+	clean) shift; cleanBuilds;;
+	help|-h) shift; usage;;
+	*) shift; echo "error: unknown option" && usage;;
+    esac
+done
